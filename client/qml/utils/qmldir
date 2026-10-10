@@ -1,0 +1,10 @@
+singleton I18n 1.0 I18n.qml
+singleton AudioDevices 1.0 AudioDevices.qml
+singleton UiPreferences 1.0 UiPreferences.qml
+singleton VideoPlaybackStore 1.0 VideoPlaybackStore.qml
+
+singleton StickerPackStore 1.0 StickerPackStore.qml
+
+singleton StickerCatalog 1.0 StickerCatalog.qml
+
+singleton QuickReactionStore 1.0 QuickReactionStore.qml

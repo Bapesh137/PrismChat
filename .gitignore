@@ -1,0 +1,49 @@
+# Rust build output
+/client/target/
+
+# CMake / native frontend build output (stored below Cargo's shared target dir)
+/client/cmake-build-*/
+/client/frontend/build/
+/client/frontend/third_party/element-call/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+
+# Generated native QML plugin
+/client/qml/Prism/Ipc/
+
+# Archives and downloaded bundles
+*.zip
+*.rar
+*.7z
+*.tar
+*.tar.gz
+*.tar*.gz
+*.tgz
+*.download
+__pycache__/
+*.pyc
+
+# Profilers, crash dumps and logs
+heaptrack.*
+perf.data*
+callgrind.out.*
+core
+core.*
+*.log
+
+# Editor and temporary files
+.Trash-*/
+.idea/
+.vscode/
+*.tmp
+*.temp
+*.bak
+*.bak.*
+*.swp
+*.swo
+*~
+.q*.qml
+.DS_Store
+Thumbs.db

@@ -1,0 +1,84 @@
+pkgname=prismchat
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Native desktop Matrix client for Windows and Arch Linux"
+arch=('x86_64' 'aarch64')
+url="https://github.com/neonit20955/PrismChat"
+license=('AGPL-3.0-only')
+depends=(
+    'gcc-libs'
+    'glibc'
+    'opus'
+    'qt6-5compat'
+    'qt6-base'
+    'qt6-declarative'
+    'qt6-multimedia'
+    'qt6-webchannel'
+    'qt6-webengine'
+    'qt6-websockets'
+)
+makedepends=('cargo' 'cmake' 'git' 'ninja' 'python')
+optdepends=('libnotify: notification when another PrismChat instance is already running')
+
+_element_call_version=0.26.0
+source=(
+    "$pkgname::git+$url.git#tag=v$pkgver"
+    "element-call-embedded-${_element_call_version}.tgz::https://registry.npmjs.org/@element-hq/element-call-embedded/-/element-call-embedded-${_element_call_version}.tgz"
+)
+sha512sums=(
+    'SKIP'
+    'e9262723c164d1ec4792796627cd19c381010b7aa549103679d20e0f7136edd2aac82ad270e70327255f5b9d0b52d183aa485aacadba27549d501c68e14a9abf'
+)
+
+prepare() {
+    local element_dir="$srcdir/$pkgname/client/frontend/third_party/element-call"
+    rm -rf "$element_dir"
+    mkdir -p "$element_dir"
+    bsdtar -xf "$srcdir/element-call-embedded-${_element_call_version}.tgz" \
+        -C "$element_dir" --strip-components=1
+
+    cd "$srcdir/$pkgname/client"
+    cargo fetch --locked
+}
+
+build() {
+    export CARGO_TARGET_DIR="$srcdir/cargo-target"
+
+    cd "$srcdir/$pkgname/client"
+    cargo build --release --locked --offline
+
+    cmake -S frontend -B "$srcdir/frontend-build" -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr \
+        -DBUILD_TESTING=OFF
+    cmake --build "$srcdir/frontend-build" --target PrismChatUi PrismNotifier
+}
+
+package() {
+    cd "$srcdir/$pkgname"
+
+    DESTDIR="$pkgdir" cmake --install "$srcdir/frontend-build" --strip
+    install -Dm755 "$srcdir/cargo-target/release/PrismChat" \
+        "$pkgdir/usr/lib/prismchat/prismchat-backend"
+    install -Dm755 client/packaging/archlinux/prismchat \
+        "$pkgdir/usr/bin/PrismChat"
+    ln -s PrismChat "$pkgdir/usr/bin/prismchat"
+
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 THIRD_PARTY_NOTICES.md \
+        "$pkgdir/usr/share/licenses/$pkgname/THIRD_PARTY_NOTICES.md"
+    cp -a LICENSES/. "$pkgdir/usr/share/licenses/$pkgname/"
+    install -Dm644 client/qml/assets/NotoEmoji-LICENSE.txt \
+        "$pkgdir/usr/share/licenses/$pkgname/NotoEmoji-LICENSE.txt"
+    install -Dm644 client/qml/assets/NotoSansCJK-LICENSE.txt \
+        "$pkgdir/usr/share/licenses/$pkgname/NotoSansCJK-LICENSE.txt"
+
+    local element_dir="client/frontend/third_party/element-call"
+    local metadata
+    for metadata in LICENSE LICENSE.md LICENSE.txt NOTICE NOTICE.md NOTICE.txt package.json; do
+        if [[ -f "$element_dir/$metadata" ]]; then
+            install -Dm644 "$element_dir/$metadata" \
+                "$pkgdir/usr/share/licenses/$pkgname/element-call-package/$metadata"
+        fi
+    done
+}

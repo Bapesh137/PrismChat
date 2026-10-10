@@ -1,0 +1,58 @@
+name: Build Arch Linux release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    container: archlinux:latest
+
+    steps:
+      - name: Install build dependencies
+        run: >-
+          pacman -Syu --noconfirm
+          base-devel cmake ninja git rust qt6-5compat qt6-base qt6-declarative
+          qt6-multimedia qt6-multimedia-ffmpeg qt6-webchannel qt6-webengine
+          qt6-websockets qt6-wayland opus zstd curl github-cli
+          desktop-file-utils
+
+      - uses: actions/checkout@v4
+
+      - name: Download appimagetool
+        run: |
+          mkdir -p "$RUNNER_TEMP/prism-tools"
+          curl --fail --location --retry 3 \
+            --output "$RUNNER_TEMP/prism-tools/appimagetool-x86_64.AppImage" \
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x "$RUNNER_TEMP/prism-tools/appimagetool-x86_64.AppImage"
+
+      - name: Build portable release
+        env:
+          PRISM_APPIMAGETOOL: ${{ runner.temp }}/prism-tools/appimagetool-x86_64.AppImage
+          PRISMCHAT_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || 'development' }}
+        run: |
+          version=${PRISMCHAT_VERSION#v}
+          PRISMCHAT_VERSION=$version client/packaging/appimage/build-appimage.sh
+
+      - name: Store workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PrismChat-archlinux-x86_64
+          path: client/target/releases/PrismChat-*
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" --generate-notes --title "PrismChat $GITHUB_REF_NAME"
+          gh release upload "$GITHUB_REF_NAME" client/target/releases/PrismChat-* --clobber

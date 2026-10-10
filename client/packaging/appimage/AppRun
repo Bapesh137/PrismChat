@@ -1,0 +1,93 @@
+#!/bin/sh
+set -eu
+
+appdir=${APPDIR:-$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)}
+runtime_dir=${XDG_RUNTIME_DIR:-/tmp}
+uid=$(id -u)
+lock_dir="$runtime_dir/prismchat-$uid.lock"
+backend_pid=
+ui_pid=
+
+cleanup()
+{
+    if [ -n "$ui_pid" ]; then
+        kill "$ui_pid" 2>/dev/null || true
+        wait "$ui_pid" 2>/dev/null || true
+    fi
+    if [ -n "$backend_pid" ]; then
+        kill "$backend_pid" 2>/dev/null || true
+        wait "$backend_pid" 2>/dev/null || true
+    fi
+    rm -f -- "$lock_dir/ipc.sock" "$lock_dir/pid" 2>/dev/null || true
+    rmdir -- "$lock_dir" 2>/dev/null || true
+}
+
+if ! mkdir -- "$lock_dir" 2>/dev/null; then
+    old_pid=
+    if [ -r "$lock_dir/pid" ]; then
+        IFS= read -r old_pid <"$lock_dir/pid" || true
+    fi
+    if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
+        message="PrismChat is already running."
+        command -v notify-send >/dev/null 2>&1 && notify-send PrismChat "$message" || true
+        exit 0
+    fi
+    rm -f -- "$lock_dir/ipc.sock" "$lock_dir/pid" 2>/dev/null || true
+    rmdir -- "$lock_dir" 2>/dev/null || true
+    mkdir -- "$lock_dir"
+fi
+printf '%s\n' "$$" >"$lock_dir/pid"
+
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+export PATH="$appdir/usr/bin${PATH:+:$PATH}"
+export LD_LIBRARY_PATH="$appdir/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export QT_PLUGIN_PATH="$appdir/usr/plugins"
+export QML2_IMPORT_PATH="$appdir/usr/qml"
+export QTWEBENGINEPROCESS_PATH="$appdir/usr/libexec/QtWebEngineProcess"
+export QTWEBENGINE_RESOURCES_PATH="$appdir/usr/resources"
+export QTWEBENGINE_LOCALES_PATH="$appdir/usr/translations/qtwebengine_locales"
+# QtWebEngine's GPU process can repeatedly allocate shared images when the
+# portable Qt/Mesa stack cannot create a context on the host display.  That
+# failure mode consumed tens of gigabytes before the kernel OOM killer stopped
+# PrismChat.  Calls still use WebRTC's software video path with Chromium GPU
+# compositing disabled.  Native/package maintainers can explicitly opt back in
+# after validating their driver stack with PRISMCHAT_DISABLE_WEBENGINE_GPU=0.
+: "${PRISMCHAT_DISABLE_WEBENGINE_GPU:=1}"
+export PRISMCHAT_DISABLE_WEBENGINE_GPU
+export PRISMCHAT_UDS_PATH="$lock_dir/ipc.sock"
+export PRISMCHAT_TRANSPORT=native
+export PRISMCHAT_LAUNCHER_PATH="${APPIMAGE:-$appdir/AppRun}"
+
+state_base=${XDG_STATE_HOME:-"${HOME:-/tmp}/.local/state"}
+log_dir="$state_base/prismchat"
+mkdir -p -- "$log_dir"
+
+"$appdir/usr/bin/prismchat-backend" >>"$log_dir/backend.log" 2>&1 &
+backend_pid=$!
+
+attempts=0
+while [ ! -S "$PRISMCHAT_UDS_PATH" ]; do
+    if ! kill -0 "$backend_pid" 2>/dev/null; then
+        echo "PrismChat backend stopped during startup. See $log_dir/backend.log" >&2
+        exit 1
+    fi
+    attempts=$((attempts + 1))
+    if [ "$attempts" -ge 100 ]; then
+        echo "PrismChat backend did not create its IPC socket. See $log_dir/backend.log" >&2
+        exit 1
+    fi
+    sleep 0.05
+done
+
+"$appdir/usr/bin/PrismChatUi" "$@" &
+ui_pid=$!
+set +e
+wait "$ui_pid"
+ui_status=$?
+set -e
+ui_pid=
+exit "$ui_status"

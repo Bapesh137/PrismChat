@@ -1,0 +1,43 @@
+[package]
+name = "PrismChat"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1.43", features = ["full"] }
+tokio-util = { version = "0.7", features = ["io"] }
+tokio-tungstenite = "0.26"
+futures-util = "0.3"
+eyeball = "0.8"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+reqwest = { version = "=0.13.4", default-features = false, features = ["query", "rustls", "json"] }
+matrix-sdk = { version = "=0.18.0", features = [
+    "automatic-room-key-forwarding",
+    "bundled-sqlite",
+    "experimental-widgets",
+] }
+matrix-sdk-ui = "=0.18.0"
+ruma = { version = "0.16", features = ["compat-encrypted-stickers"] }
+eyeball-im = "0.8"
+mime_guess = "2"
+axum = "0.7"
+dirs = "6.0.0"
+arboard = "3.6.1"
+image = { version = "0.25.10", default-features = false, features = ["png", "gif"] }
+ruopus = { version = "0.1.2", default-features = false, features = ["std"] }
+hound = "3.5.1"
+zeroize = "1"
+rand = "0.8"
+uuid = { version = "1.24", features = ["v4"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Security_Cryptography",
+    "Win32_System_Memory",
+    "Win32_System_Threading",
+    "Win32_Storage_FileSystem",
+] }

@@ -1,0 +1,61 @@
+name: Build Windows release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-2022
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.8.3"
+          arch: win64_msvc2022_64
+          modules: >-
+            qtmultimedia qtpositioning qtserialport qtshadertools
+            qtwebchannel qtwebengine qtwebsockets qt5compat
+          cache: true
+
+      - name: Build portable release
+        shell: pwsh
+        env:
+          PRISMCHAT_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || 'development' }}
+        run: |
+          ./client/packaging/windows/build-windows.ps1 -Version $env:PRISMCHAT_VERSION
+
+      - name: Store workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PrismChat-windows-x86_64
+          path: |
+            client/target/releases/PrismChat-*-windows-x86_64.zip
+            client/target/releases/PrismChat-*-windows-x86_64.zip.sha256
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view $env:GITHUB_REF_NAME 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $env:GITHUB_REF_NAME --generate-notes --title "PrismChat $env:GITHUB_REF_NAME"
+          }
+          gh release upload $env:GITHUB_REF_NAME client/target/releases/PrismChat-*-windows-x86_64.zip client/target/releases/PrismChat-*-windows-x86_64.zip.sha256 --clobber

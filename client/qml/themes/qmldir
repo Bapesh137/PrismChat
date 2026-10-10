@@ -1,0 +1,2 @@
+module PrismThemes
+singleton ThemeCatalog 1.0 ThemeCatalog.qml

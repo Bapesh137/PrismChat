@@ -1,0 +1,78 @@
+#!/bin/sh
+set -eu
+
+runtime_dir=${XDG_RUNTIME_DIR:-/tmp}
+uid=$(id -u)
+lock_dir="$runtime_dir/prismchat-$uid.lock"
+backend_pid=
+ui_pid=
+
+cleanup()
+{
+    if [ -n "$ui_pid" ]; then
+        kill "$ui_pid" 2>/dev/null || true
+        wait "$ui_pid" 2>/dev/null || true
+    fi
+    if [ -n "$backend_pid" ]; then
+        kill "$backend_pid" 2>/dev/null || true
+        wait "$backend_pid" 2>/dev/null || true
+    fi
+    rm -f -- "$lock_dir/ipc.sock" "$lock_dir/pid" 2>/dev/null || true
+    rmdir -- "$lock_dir" 2>/dev/null || true
+}
+
+umask 077
+if ! mkdir -- "$lock_dir" 2>/dev/null; then
+    old_pid=
+    if [ -r "$lock_dir/pid" ]; then
+        IFS= read -r old_pid <"$lock_dir/pid" || true
+    fi
+    if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
+        command -v notify-send >/dev/null 2>&1 \
+            && notify-send PrismChat "PrismChat is already running." || true
+        exit 0
+    fi
+    rm -f -- "$lock_dir/ipc.sock" "$lock_dir/pid" 2>/dev/null || true
+    rmdir -- "$lock_dir" 2>/dev/null || true
+    mkdir -- "$lock_dir"
+fi
+printf '%s\n' "$$" >"$lock_dir/pid"
+
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+export PRISMCHAT_UDS_PATH="$lock_dir/ipc.sock"
+export PRISMCHAT_TRANSPORT=native
+export PRISMCHAT_LAUNCHER_PATH=/usr/bin/PrismChat
+
+state_base=${XDG_STATE_HOME:-"${HOME:-/tmp}/.local/state"}
+log_dir="$state_base/prismchat"
+mkdir -p -- "$log_dir"
+
+/usr/lib/prismchat/prismchat-backend >>"$log_dir/backend.log" 2>&1 &
+backend_pid=$!
+
+attempts=0
+while [ ! -S "$PRISMCHAT_UDS_PATH" ]; do
+    if ! kill -0 "$backend_pid" 2>/dev/null; then
+        echo "PrismChat backend stopped during startup. See $log_dir/backend.log" >&2
+        exit 1
+    fi
+    attempts=$((attempts + 1))
+    if [ "$attempts" -ge 100 ]; then
+        echo "PrismChat backend did not create its IPC socket. See $log_dir/backend.log" >&2
+        exit 1
+    fi
+    sleep 0.05
+done
+
+/usr/bin/PrismChatUi "$@" &
+ui_pid=$!
+set +e
+wait "$ui_pid"
+ui_status=$?
+set -e
+ui_pid=
+exit "$ui_status"
