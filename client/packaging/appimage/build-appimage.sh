@@ -14,9 +14,28 @@ case "$machine" in
     *) echo "Unsupported AppImage architecture: $machine" >&2; exit 2 ;;
 esac
 
-bundle_name="PrismChat-${version}-archlinux-${machine}"
+# Keep the Arch release name unchanged by default; allow portable build variants.
+release_flavor=${PRISMCHAT_RELEASE_FLAVOR:-archlinux}
+bundle_name="PrismChat-${version}-${release_flavor}-${machine}"
 appdir="$package_dir/${bundle_name}.AppDir"
 cmake_dir="$target_dir/frontend-release"
+
+# Validate the Debian 13 WebRTC/PipeWire build before running Cargo/CMake.
+case "$release_flavor" in
+  debian13*)
+    if [ -z "${PRISMCHAT_QTWEBENGINE_STAGE:-}" ]; then
+        echo "Debian 13 requires PRISMCHAT_QTWEBENGINE_STAGE (custom Qt WebEngine install tree)." >&2
+        exit 1
+    fi
+    webengine_cache=${PRISMCHAT_QTWEBENGINE_CMAKE_CACHE:-}
+    if [ ! -f "$webengine_cache" ] || \
+       ! grep -Fxq 'QT_FEATURE_webengine_webrtc:INTERNAL=ON' "$webengine_cache" || \
+       ! grep -Fxq 'QT_FEATURE_webengine_webrtc_pipewire:INTERNAL=ON' "$webengine_cache"; then
+        echo "Debian 13 requires PRISMCHAT_QTWEBENGINE_CMAKE_CACHE with WebRTC and PipeWire ON." >&2
+        exit 1
+    fi
+    ;;
+esac
 
 for required in cargo cmake ninja ldd tar; do
     command -v "$required" >/dev/null 2>&1 || {
@@ -41,17 +60,15 @@ qt_translations=$($qtpaths --query QT_INSTALL_TRANSLATIONS)
 # module fail the CMake build. Keep this list explicit so CI cannot publish an
 # AppImage that exits immediately on a clean machine.
 required_qml_modules=(
-    "Qt5Compat/GraphicalEffects/qmldir:qt6-5compat"
-    "QtMultimedia/qmldir:qt6-multimedia"
-    "QtQuick/Controls/qmldir:qt6-declarative"
-    "QtWebEngine/qmldir:qt6-webengine"
+    "Qt5Compat/GraphicalEffects/qmldir"
+    "QtMultimedia/qmldir"
+    "QtQuick/Controls/qmldir"
+    "QtWebEngine/qmldir"
 )
-for module_requirement in "${required_qml_modules[@]}"; do
-    module_path=${module_requirement%%:*}
-    package_name=${module_requirement#*:}
+for module_path in "${required_qml_modules[@]}"; do
     if [ ! -f "$qt_qml/$module_path" ]; then
         echo "Required QML module is missing: $qt_qml/$module_path" >&2
-        echo "Install the Arch Linux package: $package_name" >&2
+        echo "Install the corresponding Qt 6 QML package in the build image." >&2
         exit 1
     fi
 done
@@ -78,13 +95,13 @@ install -Dm644 "$project_dir/frontend/assets/prismchat.png" "$appdir/prismchat.p
 echo "Bundling Qt runtime"
 cp -a -- "$qt_qml" "$appdir/usr/qml"
 cp -a -- "$qt_plugins" "$appdir/usr/plugins"
+
 install -Dm755 "$qt_libexecs/QtWebEngineProcess" "$appdir/usr/libexec/QtWebEngineProcess"
 cp -a -- "$qt_data/resources/." "$appdir/usr/resources/"
 cp -a -- "$qt_translations/qtwebengine_locales" \
     "$appdir/usr/translations/qtwebengine_locales"
 
-for module_requirement in "${required_qml_modules[@]}"; do
-    module_path=${module_requirement%%:*}
+for module_path in "${required_qml_modules[@]}"; do
     if [ ! -f "$appdir/usr/qml/$module_path" ]; then
         echo "Packaged QML module is missing: usr/qml/$module_path" >&2
         exit 1
@@ -145,6 +162,92 @@ while [ "$index" -lt "${#queue[@]}" ]; do
     done < <(ldd "$binary" 2>/dev/null | awk \
         '/=> \/[^ ]+/ { print $3 } /^\/[[:graph:]]+/ { print $1 }')
 done
+
+# Debian 13 needs a Qt WebEngine built with WebRTC PipeWire support.
+# The custom Qt installation is a DESTDIR tree; it is never installed into /usr.
+webengine_stage=${PRISMCHAT_QTWEBENGINE_STAGE:-}
+if [ -n "$webengine_stage" ]; then
+    webengine_stage=${webengine_stage%/}
+    if [ -d "$webengine_stage/usr" ]; then
+        webengine_stage="$webengine_stage/usr"
+    fi
+    case "$machine" in
+        x86_64) webengine_multiarch=x86_64-linux-gnu ;;
+        aarch64) webengine_multiarch=aarch64-linux-gnu ;;
+    esac
+    webengine_libdir="$webengine_stage/lib/$webengine_multiarch"
+    webengine_qml="$webengine_libdir/qt6/qml/QtWebEngine"
+    webengine_process="$webengine_stage/lib/qt6/libexec/QtWebEngineProcess"
+    webengine_resources="$webengine_stage/share/qt6/resources"
+    webengine_locales="$webengine_stage/share/qt6/translations/qtwebengine_locales"
+
+    for required in \
+        "$webengine_libdir/libQt6WebEngineCore.so.6" \
+        "$webengine_libdir/libQt6WebEngineQuick.so.6" \
+        "$webengine_libdir/libQt6WebEngineQuickDelegatesQml.so.6" \
+        "$webengine_libdir/libQt6WebEngineWidgets.so.6" \
+        "$webengine_qml/qmldir" \
+        "$webengine_qml/libqtwebenginequickplugin.so" \
+        "$webengine_process" \
+        "$webengine_resources/qtwebengine_resources.pak" \
+        "$webengine_resources/v8_context_snapshot.bin" \
+        "$webengine_locales/en-US.pak"; do
+        if [ ! -f "$required" ]; then
+            echo "Incomplete staged Qt WebEngine: $required" >&2
+            exit 1
+        fi
+    done
+
+    echo "Bundling staged Qt WebEngine from $webengine_stage"
+    rm -f -- "$appdir/usr/lib"/libQt6WebEngine*.so*
+    cp -a -- "$webengine_libdir"/libQt6WebEngine*.so* "$appdir/usr/lib/"
+    install -Dm755 "$webengine_process" "$appdir/usr/libexec/QtWebEngineProcess"
+    rm -rf -- "$appdir/usr/qml/QtWebEngine"
+    cp -a -- "$webengine_qml" "$appdir/usr/qml/QtWebEngine"
+    cp -a -- "$webengine_resources/." "$appdir/usr/resources/"
+    rm -rf -- "$appdir/usr/translations/qtwebengine_locales"
+    cp -a -- "$webengine_locales" "$appdir/usr/translations/qtwebengine_locales"
+
+    # The system Qt dependency walk happened above. Walk the replacement
+    # artifacts too so new direct/transitive dependencies are not omitted.
+    enqueue_binary "$appdir/usr/libexec/QtWebEngineProcess"
+    while IFS= read -r artifact; do
+        enqueue_binary "$artifact"
+    done < <(find "$appdir/usr/lib" -maxdepth 1 -type f -name 'libQt6WebEngine*.so*' -print)
+    while IFS= read -r artifact; do
+        enqueue_binary "$artifact"
+    done < <(find "$appdir/usr/qml/QtWebEngine" -type f -name '*.so*' -print)
+    while [ "$index" -lt "${#queue[@]}" ]; do
+        binary=${queue[$index]}
+        index=$((index + 1))
+        dependencies=$(LD_LIBRARY_PATH="$appdir/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+            ldd "$binary" 2>&1) || {
+            echo "Cannot inspect staged Qt WebEngine dependency: $binary" >&2
+            printf '%s\n' "$dependencies" >&2
+            exit 1
+        }
+        if grep -q 'not found' <<< "$dependencies"; then
+            echo "Unresolved staged Qt WebEngine dependency in $binary:" >&2
+            printf '%s\n' "$dependencies" >&2
+            exit 1
+        fi
+        while IFS= read -r dependency; do
+            [ -n "$dependency" ] || continue
+            library_name=$(basename -- "$dependency")
+            # Never replace a staged WebEngine lib with the system version.
+            if [ -e "$appdir/usr/lib/$library_name" ]; then
+                continue
+            fi
+            copy_dependency "$dependency"
+        done < <(printf '%s\n' "$dependencies" | awk \
+            '/=> \/[^ ]+/ { print $3 } /^\/[[:graph:]]+/ { print $1 }')
+    done
+    if find "$appdir/usr/lib" -maxdepth 1 -name 'libQt6WebEngine*.so*' -xtype l \
+        -print -quit | grep -q .; then
+        echo "Staged Qt WebEngine contains broken library symlinks." >&2
+        exit 1
+    fi
+fi
 
 # Keep this invariant explicit: reintroducing one of these libraries can make
 # the AppImage load a mixture of bundled Mesa and host DRI drivers.
